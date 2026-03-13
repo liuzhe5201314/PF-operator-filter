@@ -1,0 +1,90 @@
+import numpy as np
+from scipy.stats import norm
+import matplotlib.pyplot as plt
+
+tau = 1.0
+sigma_q2 = 1.0
+R = 1.0
+xmin, xmax = -30.0, 30.0
+N = 500
+n_samples_per_box = 100
+J = 50
+
+# 初始分布参数
+mu0 = 0.0
+var0 = 2.0
+
+# 生成真实轨迹和观测数据
+np.random.seed(42)
+x_true = np.zeros(J + 1)
+x_true[0] = np.random.normal(mu0, np.sqrt(var0))
+
+for j in range(J):
+    x_true[j + 1] = 0.5 * x_true[j] + 25 * x_true[j] / (1 + x_true[j] ** 2) + \
+                    8 * np.cos(1.2 * j) + np.sqrt(sigma_q2) * np.random.randn()
+
+y = x_true[1:] + np.sqrt(R) * np.random.randn(J)
+
+# 用 Ulam 方法计算转移矩阵
+edges = np.linspace(xmin, xmax, N + 1)
+centers = (edges[:-1] + edges[1:]) / 2
+
+P_list = []
+for j in range(J):
+    P = np.zeros((N, N))
+    for i in range(N):
+        left_i, right_i = edges[i], edges[i + 1]
+        samples = np.random.uniform(left_i, right_i, n_samples_per_box)
+
+        for x in samples:
+            x_next = 0.5 * x + 25 * x / (1 + x ** 2) + 8 * np.cos(1.2 * j) + \
+                     np.sqrt(sigma_q2) * np.random.randn()
+
+            if x_next < xmin:
+                idx = 0
+            elif x_next > xmax:
+                idx = N - 1
+            else:
+                idx = np.searchsorted(edges, x_next, side='right') - 1
+            P[i, idx] += 1
+
+        row_sum = P[i].sum()
+        if row_sum > 0:
+            P[i] /= row_sum
+        else:
+            P[i, :] = 1.0 / N
+
+    P_list.append(P)
+
+# 在线阶段
+w = np.zeros(N)
+for i in range(N):
+    left_i, right_i = edges[i], edges[i + 1]
+    w[i] = norm.cdf(right_i, mu0, np.sqrt(var0)) - norm.cdf(left_i, mu0, np.sqrt(var0))
+w = w / w.sum()
+
+posterior_means = []
+
+for j in range(J):
+    w_pred = w @ P_list[j]
+
+    g = np.exp(-0.5 * (y[j] - centers) ** 2 / R)
+    w_tilde = g * w_pred
+    w_new = w_tilde / w_tilde.sum()
+    w = w_new
+
+    mean = np.sum(w * centers)
+    posterior_means.append(mean)
+
+# 可视化
+time = np.arange(1, J + 1)
+plt.figure(figsize=(10, 4))
+plt.plot(time, x_true[1:], 'k-', label='True state')
+plt.plot(time, y, 'rx', markersize=4, label='Observations')
+plt.plot(time, posterior_means, 'b--', label='PFOF estimate')
+plt.xlabel('Time Step (k)')
+plt.ylabel('State')
+plt.legend()
+plt.title('Nonlinear System filtering with Perron-Frobenius operator filter')
+plt.grid(True)
+plt.show()
